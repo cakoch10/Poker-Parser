@@ -18,8 +18,8 @@ DATA_ROOT = Path("synthetic_cards")
 OUT_ROOT  = Path("cards_dataset")
 TEMPLATE  = json.load(open(DATA_ROOT/"templates"/"pokerstars.json"))
 
-N_IMAGES  = 10           # total synthetic frames to make
-MAX_PLAYERS = 6            # how many player slots to fill each frame
+N_IMAGES  = 1000           # total synthetic frames to make
+MAX_PLAYERS = 3            # how many player slots to fill each frame
 ROT_JITTER = 2             # ± degrees rotation jitter
 SCALE_JITTER = 0.05        # ± relative scale
 # ------------------------
@@ -36,7 +36,6 @@ out_labels.mkdir(parents=True, exist_ok=True)
 card_dirs = sorted([d for d in CARD_DIR.iterdir() if d.is_dir()])
 card_images = {d.name: sorted(d.glob("*.jpg")) + sorted(d.glob("*.png")) for d in card_dirs}
 class_map = {class_name: idx for idx, class_name in enumerate(card_images)}
-
 
 slots = TEMPLATE["slots"]
 slot_names = list(slots.keys())
@@ -74,8 +73,8 @@ def bbox_yolo(xmin, ymin, xmax, ymax, img_w, img_h):
     bh = (ymax - ymin) / img_h
     return cx, cy, bw, bh
 
-bg_files = list(BG_DIR.glob("*.*"))
-print(f"{len(bg_files)} backgrounds, {len(card_files)} card crops.")
+bg_files = list(BG_DIR.glob("*.jpg*"))
+print(f"{len(bg_files)} backgrounds, {len(card_images)} card crops.")
 
 for i in tqdm(range(N_IMAGES), desc="Generating"):
     bg_path = random.choice(bg_files)
@@ -87,8 +86,9 @@ for i in tqdm(range(N_IMAGES), desc="Generating"):
     labels = []
 
     for slot_name in chosen_slots:
-        card_path = random.choice(card_files)
-        card_img  = Image.open(card_path).convert("RGBA")
+        class_name, class_id, card_path = sample_random_card()
+        card_img = Image.open(card_path).convert("RGBA")
+
         slot_box  = slots[slot_name]   # [x, y, w, h]
         slot_box  = tuple(slot_box)
 
@@ -96,7 +96,6 @@ for i in tqdm(range(N_IMAGES), desc="Generating"):
         xmin, ymin, xmax, ymax = paste_card(bg, card_img, slot_box)
         yolo_box = bbox_yolo(xmin, ymin, xmax, ymax, *TEMPLATE["image_size"])
 
-        class_id = class_map[card_path.stem]
         labels.append(f"{class_id} {' '.join(f'{v:.6f}' for v in yolo_box)}")
 
     # --- save outputs ---
