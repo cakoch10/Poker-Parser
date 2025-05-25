@@ -1,0 +1,19 @@
+#--------------------------------------------------------------------
+# macOS / Finder clutter
+#--------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+.localized
+
+# Spotlight & Finder tags
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# Apple double‑files on network or FAT volumes
+Icon?
+
+*.mp4
+*.mkv
