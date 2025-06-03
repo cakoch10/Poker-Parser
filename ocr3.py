@@ -13,7 +13,12 @@ from pathlib import Path
 import os
 
 import easyocr
-reader = easyocr.Reader(['en'], gpu=False)  # or gpu=True if using CUDA/MPS
+reader = easyocr.Reader(['en'], gpu=True)  # or gpu=True if using CUDA/MPS
+
+# supress annoying pin memory warning
+import warnings
+warnings.filterwarnings("ignore", module="torch.utils.data.dataloader")
+
 
 
 # ------------------------------------------------------------------
@@ -34,9 +39,16 @@ TILES = {
 }     
 
 # Sub‑ROI offsets INSIDE **one tile** – fractions of tile (w,h)
+# OFFSETS = {
+#     'name': (0.015, 0.496, 0.787, 0.252),
+#     'pos': (0.809, 0.504, 0.182, 0.252),
+#     'stack': (0.691, 0.77, 0.306, 0.237),
+#     'action': (0.015, 0.77, 0.667, 0.216)
+# }
+
 OFFSETS = {
-    'name': (0.015, 0.496, 0.787, 0.252),
-    'pos': (0.809, 0.504, 0.182, 0.252),
+    'name': (0.015, 0.496, 0.787, 0.26),
+    'pos': (0.809, 0.49, 0.182, 0.252),
     'stack': (0.691, 0.77, 0.306, 0.237),
     'action': (0.015, 0.77, 0.667, 0.216)
 }
@@ -71,6 +83,11 @@ def binarize(crop: np.ndarray) -> np.ndarray:
 def has_content(bin_img: np.ndarray, kind: str) -> bool:
     return (bin_img > 0).mean() > CONTENT_THRESH[kind]
 
+def preprocess_crop(crop):
+    crop = cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    crop = cv2.GaussianBlur(crop, (3, 3), 0)
+    return crop
+
 # ------------------------------------------------------------------
 # OCR HELPERS
 # ------------------------------------------------------------------
@@ -98,8 +115,14 @@ def ocr_field(image, kind, index=None):
     OCR wrapper for EasyOCR.
     `image` should be a color or grayscale crop (not binarized).
     """
-    results = reader.readtext(image, detail=0)
+    results = None
+    if kind == "pos":
+        results = reader.readtext(image, detail=0, allowlist="UTGJHC+DSB21")
+        # results = reader.readtext(image, detail=0, allowlist="D")
+    else:
+        results = reader.readtext(image, detail=0)
     txt = results[0] if results else None
+    print(results)
     return txt.upper().strip() if txt else None
 
 
@@ -166,6 +189,7 @@ def process_frame(frame: np.ndarray) -> dict[str, dict]:
         for kind, roi in rois.items():
             x,y,w,h = roi
             crop = frame[y:y+h, x:x+w]
+            crop = preprocess_crop(crop)
             # bin_img = binarize(crop)
             # if not has_content(bin_img, kind):
             #     print("FAIL")
@@ -187,10 +211,11 @@ def process_frame(frame: np.ndarray) -> dict[str, dict]:
     players["pot"] = None
     x, y, w, h = POT_ROI
     pot_crop = frame[y:y+h, x:x+w]
-    bin_pot = binarize(pot_crop)  # same binarization as other fields
-    if not has_content(bin_pot, "stack"):
-        return players
-    pot_value = ocr_field(bin_pot, "pot")
+    pot_crop = preprocess_crop(pot_crop)
+    # bin_pot = binarize(pot_crop)  # same binarization as other fields
+    # if not has_content(bin_pot, "stack"):
+    #     return players
+    pot_value = ocr_field(pot_crop, "pot")
     players["pot"] = clean_stack(pot_value)
     return players
 
@@ -223,6 +248,10 @@ def debug_draw(frame: np.ndarray, results: dict[str, dict]) -> np.ndarray:
             if act := t.get("action"):
                 cv2.putText(dbg, f"{act['type']} {act['amount']}",
                             (x+5, y+h-8), font, 0.5, (0,255,0), 1)
+    # draw box around pot
+    color = (0, 255, 255)
+    x,y,w,h = POT_ROI
+    cv2.rectangle(dbg, (x,y), (x+w,y+h), color, 1)
     return dbg
 
 if __name__ == "__main__":
