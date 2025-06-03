@@ -12,6 +12,10 @@ import cv2, pytesseract, numpy as np, re, sys, pprint
 from pathlib import Path
 import os
 
+import easyocr
+reader = easyocr.Reader(['en'], gpu=False)  # or gpu=True if using CUDA/MPS
+
+
 # ------------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------------
@@ -79,15 +83,25 @@ WHITELIST = {
     "pot":  "--oem 1 --psm 7 -c tessedit_char_whitelist=0123456789KMkm.,"
 }
 
-def ocr_field(bin_img: np.ndarray, kind: str, index=None) -> str:
-    upscale = cv2.resize(bin_img, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
-    txt = pytesseract.image_to_string(upscale, config=WHITELIST[kind]).strip()
-    # txt = pytesseract.image_to_string(bin_img, config=WHITELIST[kind]).strip()
-    if index is not None:
-        filename = f"{kind}_{index}.png"
-        cv2.imwrite(os.path.join(DEBUG_BIN_DIR, filename), bin_img)
+# def ocr_field(bin_img: np.ndarray, kind: str, index=None) -> str:
+#     upscale = cv2.resize(bin_img, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+#     txt = pytesseract.image_to_string(upscale, config=WHITELIST[kind]).strip()
+#     # txt = pytesseract.image_to_string(bin_img, config=WHITELIST[kind]).strip()
+#     if index is not None:
+#         filename = f"{kind}_{index}.png"
+#         cv2.imwrite(os.path.join(DEBUG_BIN_DIR, filename), bin_img)
 
-    return txt.upper()
+#     return txt.upper()
+
+def ocr_field(image, kind, index=None):
+    """
+    OCR wrapper for EasyOCR.
+    `image` should be a color or grayscale crop (not binarized).
+    """
+    results = reader.readtext(image, detail=0)
+    txt = results[0] if results else None
+    return txt.upper().strip() if txt else None
+
 
 def _num_to_int(token: str) -> int:
     token = token.replace(",", "")
@@ -152,12 +166,12 @@ def process_frame(frame: np.ndarray) -> dict[str, dict]:
         for kind, roi in rois.items():
             x,y,w,h = roi
             crop = frame[y:y+h, x:x+w]
-            bin_img = binarize(crop)
-            if not has_content(bin_img, kind):
-                print("FAIL")
-                continue
+            # bin_img = binarize(crop)
+            # if not has_content(bin_img, kind):
+            #     print("FAIL")
+            #     continue
 
-            raw = ocr_field(bin_img, kind, index=x)
+            raw = ocr_field(crop, kind, index=x)
             print(raw)
             if kind == "stack":
                 info[kind] = clean_stack(raw)
