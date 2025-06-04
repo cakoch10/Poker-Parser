@@ -19,11 +19,50 @@ reader = easyocr.Reader(['en'], gpu=True)  # or gpu=True if using CUDA/MPS
 import warnings
 warnings.filterwarnings("ignore", module="torch.utils.data.dataloader")
 
-
-
 # ------------------------------------------------------------------
 # CONFIGURATION
 # ------------------------------------------------------------------
+
+
+VALID_POSITIONS = {"UTG", "+1", "+2", "HJ", "CO", "D", "SB", "BB", "D/SB"}
+
+#  UTGJHC+DSB21/
+# Common misreads or variants
+POSITION_MAP = {
+    "UTG": "UTG",
+    "UTJ": "UTG",
+    "UTD": "UTG",
+    "UTC": "UTG",
+    "U1G": "UTG",
+
+    "1": "+1",
+    "+1": "+1",
+
+    "2": "+2",
+    "+2": "+2",
+
+    "HJ": "HJ",
+    "H1:": "HJ",
+    "HC": "HJ",
+
+    "CO": "CO",
+    "CU": "CO",
+    "CD": "CO",
+
+    "D": "D",
+
+    "SB": "SB",
+    "SG": "SB",
+
+    "BB": "BB",
+    "BD": "BB",
+    "DB": "BB",
+
+    "D/SB": "D/SB",
+    "D+SB": "D/SB",
+}
+
+
 
 DEBUG_BIN_DIR = "debug_bin"
 os.makedirs(DEBUG_BIN_DIR, exist_ok=True)
@@ -88,6 +127,34 @@ def preprocess_crop(crop):
     crop = cv2.GaussianBlur(crop, (3, 3), 0)
     return crop
 
+def preprocess_for_digits(img):
+    img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    img = cv2.GaussianBlur(img, (3, 3), 0)
+    img = cv2.adaptiveThreshold(
+        cv2.cvtColor(img, cv2.COLOR_BGR2GRAY),
+        maxValue=255,
+        adaptiveMethod=cv2.ADAPTIVE_THRESH_MEAN_C,
+        thresholdType=cv2.THRESH_BINARY,
+        blockSize=11,
+        C=2
+    )
+    return img
+
+def preprocess_numeric_ocr(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    upscaled = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_LANCZOS4)
+
+    # Adaptive thresholding tends to preserve fine characters like commas
+    # binary = cv2.adaptiveThreshold(
+    #     upscaled, 255,
+    #     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    #     cv2.THRESH_BINARY,
+    #     blockSize=11,
+    #     C=2
+    # )
+    _, binary = cv2.threshold(upscaled, 180, 255, cv2.THRESH_BINARY_INV)
+    return binary
+
 # ------------------------------------------------------------------
 # OCR HELPERS
 # ------------------------------------------------------------------
@@ -117,12 +184,16 @@ def ocr_field(image, kind, index=None):
     """
     results = None
     if kind == "pos":
-        results = reader.readtext(image, detail=0, allowlist="UTGJHC+DSB21")
+        results = reader.readtext(image, detail=0, allowlist="UTGJHC+DSB21/")
         # results = reader.readtext(image, detail=0, allowlist="D")
+    elif kind == "stack" or kind == "pot":
+        results = reader.readtext(image, detail=0, allowlist="0123456789.,KMB")
+    elif kind == "name":
+        results = reader.readtext(image, detail=0, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.")
     else:
         results = reader.readtext(image, detail=0)
     txt = results[0] if results else None
-    print(results)
+    # print(results)
     return txt.upper().strip() if txt else None
 
 
@@ -137,6 +208,9 @@ def _num_to_int(token: str) -> int:
 def clean_stack(txt: str | None) -> int | None:
     if not txt:
         return None
+    txt = re.sub(r"(\d+)[,\.](\d)([KM]?)$", r"\1.\2\3", txt)
+
+
     m = re.match(r"(\d+(?:\.\d+)?)([KM]?)", txt.replace(",", ""))
     return _num_to_int("".join(m.groups())) if m else None
 
@@ -162,6 +236,28 @@ def parse_action(txt: str | None) -> dict | None:
 
     return None
 
+
+def clean_position(txt: str | None) -> str | None:
+    if not txt:
+        return None
+
+    txt = txt.strip().upper().replace(" ", "").replace(".", "")
+
+    # Try direct match
+    if txt in VALID_POSITIONS:
+        return txt
+
+    # Try fuzzy match through known map
+    if txt in POSITION_MAP:
+        return POSITION_MAP[txt]
+
+    # Minor numeric corrections
+    txt = txt.replace("1", "+1").replace("2", "+2")
+    if txt in POSITION_MAP:
+        return POSITION_MAP[txt]
+
+    return None
+
 # ------------------------------------------------------------------
 # ROI CALCULATION
 # ------------------------------------------------------------------
@@ -180,38 +276,48 @@ def sub_rois(tile_bbox: tuple[int, int, int, int]) -> dict[str, tuple[int, int, 
 def process_frame(frame: np.ndarray) -> dict[str, dict]:
     """
     Returns:
-        { 'SB': {'name':'ZHENG','pos':'SB','stack':72000,'action': {...}}, ... }
+        { 'P1': {'name':'ZHENG','pos':'SB','stack':72000,'action': {...}}, ... } for up to 4 players
     """
+    # print("Processing frame")
     players = {}
     for seat, tile in TILES.items():
         rois = sub_rois(tile)
         info = {}
+        info["bbox"] = tile
         for kind, roi in rois.items():
             x,y,w,h = roi
             crop = frame[y:y+h, x:x+w]
-            crop = preprocess_crop(crop)
+            pcrop = preprocess_crop(crop)
             # bin_img = binarize(crop)
             # if not has_content(bin_img, kind):
             #     print("FAIL")
             #     continue
-
-            raw = ocr_field(crop, kind, index=x)
-            print(raw)
+            raw = ocr_field(pcrop, kind, index=x)
+            # print(kind)
+            # print(raw)
             if kind == "stack":
+                # num_crop = preprocess_numeric_ocr(crop)
+                # raw = ocr_field(num_crop, kind, index=x)
                 info[kind] = clean_stack(raw)
             elif kind == "action":
                 info[kind] = parse_action(raw)
+            elif kind == "pos":
+                info[kind] = clean_position(raw)
             else:
                 info[kind] = raw
 
         if info:                                # skip empty tiles
-            players[seat] = info
-        print(info)
+            # players[seat] = info
+            # this_name = info["name"]
+            if info["name"]:
+                players[seat] = info
+        
+        # print(info)
     # Extract and OCR the pot box
     players["pot"] = None
     x, y, w, h = POT_ROI
     pot_crop = frame[y:y+h, x:x+w]
-    pot_crop = preprocess_crop(pot_crop)
+    pot_crop = preprocess_numeric_ocr(pot_crop)
     # bin_pot = binarize(pot_crop)  # same binarization as other fields
     # if not has_content(bin_pot, "stack"):
     #     return players
@@ -240,17 +346,19 @@ def debug_draw(frame: np.ndarray, results: dict[str, dict]) -> np.ndarray:
                 "action": (255, 0, 255),
             }[kind]
             cv2.rectangle(dbg, (x2, y2), (x2 + w2, y2 + h2), color, 1)
-        cv2.rectangle(dbg, (x,y), (x+w,y+h), (0,255,0), 1)
+        cv2.rectangle(dbg, (x,y), (x+w,y+h), (0, 128, 0), 1)
         if seat in results:
             t = results[seat]
             label = f"{t.get('name','')} {t.get('pos','')} {t.get('stack','')}"
-            cv2.putText(dbg, label, (x+5, y+15), font, 0.5, (0,255,0), 1)
+            cv2.putText(dbg, label, (x+5, y+15), font, 0.5, (0, 128, 0), 2)
             if act := t.get("action"):
                 cv2.putText(dbg, f"{act['type']} {act['amount']}",
-                            (x+5, y+h-8), font, 0.5, (0,255,0), 1)
+                            (x+5, y+h-8), font, 0.5, (0, 128, 0), 2)
     # draw box around pot
     color = (0, 255, 255)
     x,y,w,h = POT_ROI
+    if results["pot"]:
+        cv2.putText(dbg, str(results["pot"]) , (x+5, y+15), font, 0.5, (0, 128, 0), 2)
     cv2.rectangle(dbg, (x,y), (x+w,y+h), color, 1)
     return dbg
 
