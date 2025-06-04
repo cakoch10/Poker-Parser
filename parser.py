@@ -8,22 +8,31 @@ def is_new_hand(prev: Optional[Dict], curr: Dict) -> bool:
     if prev is None:
         return True
 
-    pot_reset = prev.get("pot", 0) > 0 and curr.get("pot", 0) == 0
-    board_reset = len(prev.get("cards", [])) > 0 and len(curr.get("cards", [])) == 0
+    if "pot" in prev:
+        if curr:
+            if "pot" in curr:
+                if prev["pot"] and curr["pot"]:
+                    if prev["pot"] > curr["pot"]:
+                        return True
+                # we should technically also account for the
+                # situation where it folds around and BB gets a walk
+    
+    # pot_reset = prev.get("pot", 0) > 0 and curr.get("pot", 0) == 0
+    # board_reset = len(prev.get("cards", [])) > 0 and len(curr.get("cards", [])) == 0
 
-    stack_changes = any(
-        prev["players"].get(pid, {}).get("stack") != curr["players"].get(pid, {}).get("stack")
-        for pid in curr["players"]
-    )
+    # stack_changes = any(
+    #     prev["players"].get(pid, {}).get("stack") != curr["players"].get(pid, {}).get("stack")
+    #     for pid in curr["players"]
+    # )
 
-    actions_cleared = all(
-        not curr["players"].get(pid, {}).get("action") for pid in curr["players"]
-    )
+    # actions_cleared = all(
+    #     not curr["players"].get(pid, {}).get("action") for pid in curr["players"]
+    # )
 
-    if pot_reset and board_reset:
-        return True
-    if pot_reset and stack_changes and actions_cleared:
-        return True
+    # if pot_reset and board_reset:
+    #     return True
+    # if pot_reset and stack_changes and actions_cleared:
+    #     return True
 
     return False
 
@@ -34,7 +43,7 @@ def should_emit_new_state(curr: Dict, prev: Optional[Dict]) -> bool:
 
     if curr.get("pot") != prev.get("pot"):
         return True
-    if curr.get("cards") != prev.get("cards"):
+    if len(curr.get("cards")) != len(prev.get("cards")):
         return True
 
     for pid in curr["players"]:
@@ -127,8 +136,14 @@ def stream_parse_video(video_path: str, output_path: str, frame_skip: int = 10):
             continue
 
         state = parse_frame(frame)
+
         if state["players"]:
-            print(json.dumps(state, indent=2))
+            # print(json.dumps(state, indent=2))
+            pass
+        else:
+            continue
+        
+
         state["frame"] = frame_idx
 
         if is_new_hand(last_state, state):
@@ -138,6 +153,8 @@ def stream_parse_video(video_path: str, output_path: str, frame_skip: int = 10):
 
         if should_emit_new_state(state, last_state):
             current_hand.append(state)
+            print("Should emit")
+            print(json.dumps(state, indent=2))
 
         last_state = state
 

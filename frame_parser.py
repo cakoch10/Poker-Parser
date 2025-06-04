@@ -12,10 +12,16 @@ def assign_cards_to_sources(cards, player_boxes, frame_shape):
 
     player_hole_cards = {pid: [] for pid in player_boxes}
     community = []
+    seen = []
 
     for card in cards:
         x, y, cw, ch = card["bbox"]
         cx, cy = (x + cw / 2) / w, (y + ch / 2) / h
+
+        if card["class_id"] in seen:
+            continue
+        else:
+            seen.append(card["class_id"])
 
         assigned = False
         for pid in player_boxes:
@@ -28,8 +34,16 @@ def assign_cards_to_sources(cards, player_boxes, frame_shape):
 
         if not assigned and community_x_range[0] <= cx <= community_x_range[1] and community_y_range[0] <= cy <= community_y_range[1]:
             community.append(card)
+    
+    for pid, cards in player_hole_cards.items():
+        if len(cards) > 2:
+            cards.sort(key=lambda c: c.get("confidence", 0), reverse=True)
+            player_hole_cards[pid] = cards[:2]
 
     community.sort(key=lambda c: c["bbox"][0])
+
+
+
     return player_hole_cards, community
 
 
@@ -73,7 +87,10 @@ def parse_frame(frame) -> Dict:
     player_cards, board_cards = assign_cards_to_sources(parsed_cards, state["players"], frame.shape)
 
     for pid, cards in player_cards.items():
-        state["players"][pid]["cards"] = cards
+        # state["players"][pid]["cards"] = cards
+        state["players"][pid]["cards"] = [c["name"] for c in cards if "name" in c]
 
-    state["cards"] = board_cards
+
+    # state["cards"] = board_cards
+    state["cards"] = [c["name"] for c in board_cards if "name" in c]
     return state

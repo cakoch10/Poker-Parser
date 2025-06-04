@@ -10,7 +10,7 @@ names = yaml.safe_load(Path("cards.yaml").read_text())["names"]
 model = YOLO("weights/best.pt")
 
 
-def detect_cards(frame, conf_threshold=0.01):
+def detect_cards(frame, conf_threshold=0.75):
     result = model(frame, conf=conf_threshold, device="mps", verbose=False)[0]
 
     cls_ids = result.boxes.cls.cpu().numpy().astype(int)
